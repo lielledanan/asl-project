@@ -5,9 +5,11 @@ import tensorflow as tf
 import numpy as np
 from collections import deque, Counter
 
-# 1. Page Configuration
+# 1. הגדרות דף האפליקציה
+# פונקציה שקובעת את כותרת הטאב בדפדפן ואת פריסת הדף (רחבה)
 st.set_page_config(page_title="ASL Real-Time Translator", layout="wide")
 
+# הוספת עיצוב CSS מותאם אישית כדי לשפר את המראה הוויזואלי של האפליקציה
 st.markdown("""
    <style>
    .main { background-color: #f5f7f9; }
@@ -16,7 +18,7 @@ st.markdown("""
    </style>
    """, unsafe_allow_html=True)
 
-# 2. Sidebar & Model Loading
+# 2. תפריט צד (Sidebar) וטעינת המודל
 st.sidebar.title("Configuration & Guide")
 st.sidebar.info("This app uses a CNN model to translate ASL fingerspelling into English text in real-time.")
 
@@ -25,52 +27,69 @@ try:
 except:
     st.sidebar.warning("Note: Place 'guide.png' in your project folder.")
 
-
+# פונקציה לטעינת המודל עם Cache (זיכרון מטמון)
+# השימוש ב-cache_resource מבטיח שהמודל ייטען רק פעם אחת ולא בכל רענון של הדף
 @st.cache_resource
 def load_my_model():
-    return tf.keras.models.load_model("asl_recognition_model.keras")
-
+    from load_model_compat import load_model_compatible
+    return load_model_compatible("asl_recognition_new_model.keras")
 
 model = load_my_model()
+
+# רשימת המחלקות (האותיות) שהמודל יודע לזהות, לפי הסדר שבו אומן
 class_names = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
                'V', 'W', 'X', 'Y', 'Z', 'del', 'nothing', 'space']
 
 
-# 3. Balanced Video Processor
+# 3. מחלקת עיבוד הווידאו (הלב של המערכת)
+# מחלקה זו מטפלת בכל פריים שמגיע מהמצלמה ומבצעת עליו את החיזוי
 class ASLVideoProcessor:
     def __init__(self):
+        # buffer: תור (Queue) ששומר את 10 החיזויים האחרונים כדי ליצור יציבות בזיהוי
         self.buffer = deque(maxlen=10)
+        # last_added_letter: שומר את האות האחרונה שנוספה לטקסט כדי למנוע כפילויות
         self.last_added_letter = None
+        # frame_count: מונה פריימים לצורך דילוג על פריימים (אופטימיזציה)
         self.frame_count = 0
+        # final_text: המחרוזת הסופית של המילים שהמשתמש כתב
         self.final_text = ""
+        # display_label: הטקסט שמוצג מעל תיבת המצלמה (האות הנוכחית)
         self.display_label = "Scanning..."
 
+    # פונקציית recv נקראת באופן אוטומטי עבור כל פריים וידאו חדש
     def recv(self, frame):
+        # המרת הפריים למערך NumPy (פורמט ש-OpenCV מבין)
         img = frame.to_ndarray(format="bgr24")
-        img = cv2.flip(img, 1)
+        img = cv2.flip(img, 1) # היפוך מראה לנוחות המשתמש
         h, w, _ = img.shape
         self.frame_count += 1
 
+        # הגדרת אזור העניין (ROI) - הריבוע הירוק שבו המשתמש שם את היד
         x1, y1, x2, y2 = 100, 100, 350, 350
         roi = img[y1:y2, x1:x2]
 
         # דילוג מינימלי על פריימים (3) כדי לשמור על מהירות וגם על איכות הסיווג
         if self.frame_count % 3 == 0:
+            # עיבוד מקדים: שינוי גודל ל-64x64 והמרה ל-RGB (כפי שהמודל אומן)
             processed = cv2.resize(roi, (64, 64))
             rgb = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
             input_data = np.expand_dims(rgb.astype("float32"), axis=0)
 
+            # הרצת החיזוי דרך המודל
             prediction = model.predict(input_data, verbose=0)
             class_id = np.argmax(prediction)
             confidence = prediction[0][class_id]
 
-            # ספי הביטחון שביקשת
+            # החלטה על האות בהתאם לסף הביטחון (0.3)
             letter = class_names[class_id] if confidence > 0.30 else "nothing"
 
+            # לוגיקה של הוספת אותיות למשפט (רק אם הביטחון מעל 0.7)
             if letter != "nothing" and confidence > 0.70:
                 self.buffer.append(letter)
+                # בדיקה אם יש הסכמה ב-buffer (לפחות 8 מתוך 10 פריימים זהים)
                 if len(self.buffer) == 10:
                     most_common, count = Counter(self.buffer).most_common(1)[0]
+                    # טיפול במקרים מיוחדים: רווח ומחיקה
                     if count >= 8 and most_common != self.last_added_letter:
                         if most_common == "space":
                             self.final_text += " "
@@ -84,6 +103,7 @@ class ASLVideoProcessor:
             if letter == "nothing":
                 self.last_added_letter = None
 
+            # עדכון התווית שתוצג על המסך
             self.display_label = f"{letter} ({confidence:.2f})"
 
         # ציור הממשק בתוך הווידאו
@@ -91,12 +111,15 @@ class ASLVideoProcessor:
         cv2.putText(img, self.display_label, (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (46, 204, 113), 2)
 
+        # ציור רקע שחור שקוף בתחתית המסך להצגת התוצאה
         overlay = img.copy()
         cv2.rectangle(overlay, (0, h - 60), (w, h), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
+        # הצגת המשפט המלא שנכתב עד כה
         cv2.putText(img, f"Result: {self.final_text}", (20, h - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
+        # החזרת הפריים המעובד לממשק ה-Streamlit
         return frame.from_ndarray(img, format="bgr24")
 
 
@@ -113,4 +136,4 @@ webrtc_streamer(
 )
 
 st.markdown("---")
-st.caption("Developed with ❤️ for Machine Learning Project 2026- Lielle Danan")
+st.caption("Developed with ❤️ for Machin3e Learning Project 2026- Lielle Danan")

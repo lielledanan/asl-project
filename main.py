@@ -3,12 +3,20 @@ import tensorflow as tf
 import numpy as np
 from collections import deque, Counter
 import os
+import keras
+print(keras.__version__)
 
 # ביטול הודעות מערכת של טנזורפלו
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # ===== 1. טעינת המודל =====
-model = tf.keras.models.load_model("asl_recognition_model.keras")
+# model = tf.keras.models.load_model("asl_recognition_new_model.keras")
+# Adding compile=False skips the part where it checks for complex metadata
+# model = tf.keras.models.load_model("asl_recognition_new_model.keras", compile=False)
+
+from load_model_compat import load_model_compatible
+model = load_model_compatible("asl_recognition_new_model.keras")
+
 
 # ===== 2. רשימת האותיות המדויקת מהקולב =====
 class_names = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
